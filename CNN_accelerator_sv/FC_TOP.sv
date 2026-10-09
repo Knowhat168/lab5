@@ -14,7 +14,7 @@ module FC_TOP (
     output logic       valid_output
 );
 
-    typedef enum logic [1:0] {LOAD, FC1, FC2, DONE} state_t;
+    typedef enum logic [2:0] {LOAD, FC1, FC1_FLUSH, FC2_MULT, FC2_SUM, DONE} state_t;
 
     state_t state, state_next;
 
@@ -37,6 +37,13 @@ module FC_TOP (
     logic signed [11:0] FC1_sum_0, FC1_sum_0_next;
     logic signed [11:0] FC1_sum_1, FC1_sum_1_next;
     logic signed [11:0] FC1_sum_2, FC1_sum_2_next;
+    logic signed [11:0] FC1_product_0, FC1_product_0_next;
+    logic signed [11:0] FC1_product_1, FC1_product_1_next;
+    logic signed [11:0] FC1_product_2, FC1_product_2_next;
+    logic FC1_product_valid, FC1_product_valid_next;
+    logic signed [15:0] FC2_product_0, FC2_product_0_next;
+    logic signed [15:0] FC2_product_1, FC2_product_1_next;
+    logic signed [15:0] FC2_product_2, FC2_product_2_next;
     logic signed [15:0] FC2_score;
 
     logic fc_output_next;
@@ -83,6 +90,13 @@ module FC_TOP (
         FC1_sum_0_next      = FC1_sum_0;
         FC1_sum_1_next      = FC1_sum_1;
         FC1_sum_2_next      = FC1_sum_2;
+        FC1_product_0_next  = FC1_product_0;
+        FC1_product_1_next  = FC1_product_1;
+        FC1_product_2_next  = FC1_product_2;
+        FC1_product_valid_next = FC1_product_valid;
+        FC2_product_0_next  = FC2_product_0;
+        FC2_product_1_next  = FC2_product_1;
+        FC2_product_2_next  = FC2_product_2;
         fc_output_next      = fc_output;
         valid_output_next   = 1'b0;
         FC2_score           = 16'sd0;
@@ -127,29 +141,50 @@ module FC_TOP (
                     FC1_sum_1_next = FC1_BIAS_1;
                     FC1_sum_2_next = FC1_BIAS_2;
                     FC1_index_next = 4'd0;
+                    FC1_product_valid_next = 1'b0;
                     state_next = FC1;
                 end
             end
 
             FC1: begin
-                FC1_sum_0_next = FC1_sum_0 +
-                    pool_product(pooling_input[FC1_index], k_FC1[FC1_index]);
-                FC1_sum_1_next = FC1_sum_1 +
-                    pool_product(pooling_input[FC1_index], k_FC1[16 + FC1_index]);
-                FC1_sum_2_next = FC1_sum_2 +
-                    pool_product(pooling_input[FC1_index], k_FC1[32 + FC1_index]);
+                if (FC1_product_valid) begin
+                    FC1_sum_0_next = FC1_sum_0 + FC1_product_0;
+                    FC1_sum_1_next = FC1_sum_1 + FC1_product_1;
+                    FC1_sum_2_next = FC1_sum_2 + FC1_product_2;
+                end
+
+                FC1_product_0_next = pool_product(
+                    pooling_input[FC1_index], k_FC1[FC1_index]);
+                FC1_product_1_next = pool_product(
+                    pooling_input[FC1_index], k_FC1[16 + FC1_index]);
+                FC1_product_2_next = pool_product(
+                    pooling_input[FC1_index], k_FC1[32 + FC1_index]);
+                FC1_product_valid_next = 1'b1;
 
                 if (FC1_index == 4'd15)
-                    state_next = FC2;
+                    state_next = FC1_FLUSH;
                 else
                     FC1_index_next = FC1_index + 1'b1;
             end
 
-            FC2: begin
-                FC2_score = FC2_product(FC1_sum_0, k_FC2[0]) +
-                            FC2_product(FC1_sum_1, k_FC2[1]) +
-                            FC2_product(FC1_sum_2, k_FC2[2]) +
-                            FC2_BIAS;
+            FC1_FLUSH: begin
+                FC1_sum_0_next = FC1_sum_0 + FC1_product_0;
+                FC1_sum_1_next = FC1_sum_1 + FC1_product_1;
+                FC1_sum_2_next = FC1_sum_2 + FC1_product_2;
+                FC1_product_valid_next = 1'b0;
+                state_next = FC2_MULT;
+            end
+
+            FC2_MULT: begin
+                FC2_product_0_next = FC2_product(FC1_sum_0, k_FC2[0]);
+                FC2_product_1_next = FC2_product(FC1_sum_1, k_FC2[1]);
+                FC2_product_2_next = FC2_product(FC1_sum_2, k_FC2[2]);
+                state_next = FC2_SUM;
+            end
+
+            FC2_SUM: begin
+                FC2_score = FC2_product_0 + FC2_product_1 +
+                            FC2_product_2 + FC2_BIAS;
                 fc_output_next = (FC2_score > 16'sd0);
                 valid_output_next = 1'b1;
                 state_next = DONE;
@@ -161,6 +196,13 @@ module FC_TOP (
                 FC1_sum_0_next = 12'sd0;
                 FC1_sum_1_next = 12'sd0;
                 FC1_sum_2_next = 12'sd0;
+                FC1_product_0_next = 12'sd0;
+                FC1_product_1_next = 12'sd0;
+                FC1_product_2_next = 12'sd0;
+                FC1_product_valid_next = 1'b0;
+                FC2_product_0_next = 16'sd0;
+                FC2_product_1_next = 16'sd0;
+                FC2_product_2_next = 16'sd0;
                 FC1_index_next = 4'd0;
                 state_next = LOAD;
             end
@@ -184,6 +226,13 @@ module FC_TOP (
             FC1_sum_0      <= 12'sd0;
             FC1_sum_1      <= 12'sd0;
             FC1_sum_2      <= 12'sd0;
+            FC1_product_0  <= 12'sd0;
+            FC1_product_1  <= 12'sd0;
+            FC1_product_2  <= 12'sd0;
+            FC1_product_valid <= 1'b0;
+            FC2_product_0  <= 16'sd0;
+            FC2_product_1  <= 16'sd0;
+            FC2_product_2  <= 16'sd0;
             fc_output      <= 1'b0;
             valid_output   <= 1'b0;
         end
@@ -199,6 +248,13 @@ module FC_TOP (
             FC1_sum_0      <= FC1_sum_0_next;
             FC1_sum_1      <= FC1_sum_1_next;
             FC1_sum_2      <= FC1_sum_2_next;
+            FC1_product_0  <= FC1_product_0_next;
+            FC1_product_1  <= FC1_product_1_next;
+            FC1_product_2  <= FC1_product_2_next;
+            FC1_product_valid <= FC1_product_valid_next;
+            FC2_product_0  <= FC2_product_0_next;
+            FC2_product_1  <= FC2_product_1_next;
+            FC2_product_2  <= FC2_product_2_next;
             fc_output      <= fc_output_next;
             valid_output   <= valid_output_next;
         end
